@@ -6,8 +6,9 @@ import random
 from knopki import d
 from random import random, randint
 from aiogram import Bot, Dispatcher, executor, types
+from aiogram.types.message import ContentType
 from aiogram.dispatcher.filters import Text
-
+YTOKEN = '381764678:TEST:31528'
 API_TOKEN = '2078762775:AAHa_FHvRBUzdJGtTLGqKucBioxdv5NTikM'
 from aiogram.types import ReplyKeyboardRemove, \
     ReplyKeyboardMarkup, KeyboardButton, \
@@ -118,13 +119,48 @@ async def send_change(message: types.Message):
         if a[3] != 'None':
             keyboard = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add(q[a[1]]).add(q[a[2]]).add(
                 q[a[3]])
-        else:
+        elif (a[2]!='None') and (a[3]=='None'):
             keyboard = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add(q[a[1]]).add(q[a[2]]).add(
                 reply_drug)
+        elif a[2]=='None':
+            keyboard = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add(q[a[1]]).add(reply_drug).add(
+                reply_drug)
 
-    await message.reply("Выбери предмет, на который желаешь поменять свой выбор", reply_markup=keyboard)
-    cursor.execute(f'UPDATE users SET sost = 5 WHERE id == {tg_id} ')
-    db.commit()
+    if a[0]!=0:
+        await message.reply("Выбери предмет, на который желаешь поменять свой выбор", reply_markup=keyboard)
+        cursor.execute(f'UPDATE users SET sost = 5 WHERE id == {tg_id} ')
+        db.commit()
+    else:
+        await message.reply('Вам недоступна смена предмета. Чтобы разблокировать другой предмет напишите "/donat"')
+        cursor.execute(f'UPDATE users SET sost = 2 WHERE id == {tg_id} ')
+        db.commit()
+
+@dp.message_handler(commands=['donat'])
+async def donat(message: types.Message):
+    await message.reply('Возможные варианты доната:'+'\n'+'Произвольная сумма на карту:'+'\n'+'2200 2404 4873 3218'+'\n'+'Купить дополнительные предметы'+'\n'+'Если у вас уже куплено 2 дополнительных предмета, то больше добавить мы, к сожалению не сможем, покупка будет расценена, как пожертвование ', reply_markup=kb.pred1_inline_markup)
+@dp.callback_query_handler(text="pred1")
+async def pred1(call: types.CallbackQuery):
+    await bot.delete_message(call.from_user.id, call.message.message_id)
+    await bot.send_invoice(chat_id=call.from_user.id,title="Покупка дополнительного предмета",description='Доп. предмет',payload='pred',
+                           provider_token=YTOKEN,currency='RUB',start_parameter='text',prices=[{"label":"Рубли", "amount": 7400}])
+@dp.pre_checkout_query_handler()
+async def process_pre_checkout_query(pre_checkout_query:types.PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(pre_checkout_query.id,ok=True)
+@dp.message_handler(content_types=ContentType.SUCCESSFUL_PAYMENT)
+async def process_pay(message: types.Message):
+    if message.successful_payment.invoice_payload == 'pred':
+        tg_id = int(message.from_user.id)
+        cursor.execute(f'SELECT donat FROM users WHERE id=={tg_id}')
+        donat = cursor.fetchone()
+        donat = int(donat[0])
+        print(donat)
+        if donat==0:
+            await bot.send_message(message.from_user.id,
+                                   'Вы купили дополнительный предметы. Напишите "/change", чтобы добавить его себе')
+            cursor.execute(f'UPDATE users SET donat = 2 WHERE id == {tg_id} ')
+            db.commit()
+        else:
+            await bot.send_message(message.from_user.id,'К сожалению нельзя купить больше 2 дополнительных предметов.')
 
 
 @dp.message_handler(commands=['statistic'])
@@ -1027,7 +1063,8 @@ async def zadania(message: types.Message):
     p = p.replace(')', '')
     b = p.split(',')
     for i in range(len(b)):
-        b[i] = int(b[i])
+        if b[i] != 'None':
+            b[i] = int(b[i])
     if sost == 2:
         nomer = str(message.text)
         await  message.reply('Вот ваше задание:')
@@ -1977,7 +2014,6 @@ async def zadania(message: types.Message):
     elif sost==7:
         cursor.execute(f'UPDATE users SET sost = 2 WHERE id == {tg_id} ')
         db.commit()
-
 
 
 
