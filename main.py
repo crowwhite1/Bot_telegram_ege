@@ -6,13 +6,17 @@ import random
 from knopki import d
 from random import random, randint
 from aiogram import Bot, Dispatcher, executor, types
+from pyqiwip2p import QiwiP2P
 from aiogram.types.message import ContentType
 from aiogram.dispatcher.filters import Text
 YTOKEN = '381764678:TEST:31528'
 API_TOKEN = '2078762775:AAHa_FHvRBUzdJGtTLGqKucBioxdv5NTikM'
+p2p = QiwiP2P(auth_key='eyJ2ZXJzaW9uIjoiUDJQIiwiZGF0YSI6eyJwYXlpbl9tZXJjaGFudF9zaXRlX3VpZCI6Im9qYmF3bi0wMCIsInVzZXJfaWQiOiI3OTg4NTU1ODU5NiIsInNlY3JldCI6IjgzNmZlNzQ4MDA2ODFkMWIzZmNmNGZjMGUwNDM5NDMxOGFiNzE2Y2JlNTdjODdmNTk1YTY3ZDRkZGNlY2FlZmQifX0=')
+#48e7qUxn9T7RyYE1MVZswX1FRSbE6iyCj2gCRwwF3Dnh5XrasNTx3BGPiMsyXQFNKQhvukniQG8RTVhYm3iPv7hb9epaxFxZiGyJF3dUWoPRZBaGB1Ycf4jUuR65eH1eUAPgSZMcjgNTcRBaY5vUmBbPS58xQRPCWfVPsrqEuN96j444Jamr2i4yC1JeB
 from aiogram.types import ReplyKeyboardRemove, \
     ReplyKeyboardMarkup, KeyboardButton, \
     InlineKeyboardMarkup, InlineKeyboardButton
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +57,18 @@ import knopki as kb
 
 def toFixed(numObj, digits=0):
     return f"{numObj:.{digits}f}"
+def add_check(user_id, bill_id):
+    return cursor.execute(f'INSERT INTO check_bill(id,bill_id) values({user_id}, {bill_id})')
+def get_check(bill_id):
+    result = cursor.execute(f'select * from check_bill where bill_id=?',(bill_id,)).fetchmany(1)
+    if not bool(len(result)):
+        return False
+    else:
+        return int(result[0][0])
+def delete_check(bill_id):
+    return cursor.execute(f'delete from check_bill where bill_id=?', (bill_id,))
+
+
 
 
 @dp.message_handler(commands=['start'])
@@ -141,26 +157,39 @@ async def donat(message: types.Message):
 @dp.callback_query_handler(text="pred1")
 async def pred1(call: types.CallbackQuery):
     await bot.delete_message(call.from_user.id, call.message.message_id)
-    await bot.send_invoice(chat_id=call.from_user.id,title="Покупка дополнительного предмета",description='Доп. предмет',payload='pred',
-                           provider_token=YTOKEN,currency='RUB',start_parameter='text',prices=[{"label":"Рубли", "amount": 7400}])
-@dp.pre_checkout_query_handler()
-async def process_pre_checkout_query(pre_checkout_query:types.PreCheckoutQuery):
-    await bot.answer_pre_checkout_query(pre_checkout_query.id,ok=True)
-@dp.message_handler(content_types=ContentType.SUCCESSFUL_PAYMENT)
-async def process_pay(message: types.Message):
-    if message.successful_payment.invoice_payload == 'pred':
-        tg_id = int(message.from_user.id)
-        cursor.execute(f'SELECT donat FROM users WHERE id=={tg_id}')
-        donat = cursor.fetchone()
-        donat = int(donat[0])
-        print(donat)
-        if donat==0:
-            await bot.send_message(message.from_user.id,
-                                   'Вы купили дополнительный предметы. Напишите "/change", чтобы добавить его себе')
-            cursor.execute(f'UPDATE users SET donat = 2 WHERE id == {tg_id} ')
-            db.commit()
+    #await bot.send_invoice(chat_id=call.from_user.id,title="Покупка дополнительного предмета",description='Доп. предмет',payload='pred',
+    #                        provider_token=YTOKEN,currency='RUB',start_parameter='text',prices=[{"label":"Рубли", "amount": 7400}])
+    comment = str(call.from_user.id) + '_'+ str(randint(1000,10000))
+    bill = p2p.bill(amount=1, lifetime=15,comment=comment)
+    s= str(bill.bill_id)
+    #print(s)
+    cursor.execute(f'INSERT INTO check_bill(id,bill_id) values (?,?)', (call.from_user.id, s,))
+    db.commit()
+    await bot.send_message(call.from_user.id, "Вам необходимо отправить 30 рублей на наш счёт QIWI"+"\n"+"По ссылке: "+str(bill.pay_url)+"\n"+"Указав в комментарии к оплате: "+str(comment),
+                           reply_markup=kb.buy_menu(url=bill.pay_url, bill=bill.bill_id) )
+
+@dp.callback_query_handler(text_contains = "check_")
+async def pred2(call: types.CallbackQuery):
+    bill = str(call.data).replace('check_','')
+    info = get_check(bill)
+    cursor.execute(f'SELECT donat from users where id == {call.from_user.id}')
+    p = cursor.fetchone()
+    p = int(p[-1])
+    if info!= False:
+        if str(p2p.check(bill_id=bill).status == 'PAID'):
+            if p == 0:
+                await bot.send_message(call.from_user.id,
+                                            'Вы купили дополнительные предметы. Напишите "/change", чтобы добавить их себе')
+                cursor.execute(f'UPDATE users SET donat = 2 WHERE id == {call.from_user.id} ')
+                delete_check(bill)
+                db.commit()
+            else:
+                await bot.send_message(call.from_user.id,'К сожалению нельзя купить больше 2 дополнительных предметов.')
         else:
-            await bot.send_message(message.from_user.id,'К сожалению нельзя купить больше 2 дополнительных предметов.')
+            bot.send_message(call.from_user.id,"Вы не оплатили счёт!")
+    else:
+        await bot.send_message(call.from_user.id, 'Счёт не найден')
+
 
 
 @dp.message_handler(commands=['statistic'])
@@ -189,9 +218,12 @@ async def statist(message: types.Message):
         cursor.execute(f'SELECT pred1 from users where id == {tg_id}')
         q = cursor.fetchone()
         q = int(q[-1])
+        if q[-1]!=None:
+            q = int(q[-1])
+        else: q[-1] = 'None'
         cursor.execute(f'SELECT pred2 from users where id == {tg_id}')
         v = cursor.fetchone()
-        v = int(v[-1])
+        v[-1] = int(v[-1])
         await message.reply(
             'Вот Ваша статистика по предметам (задания второй части не учитываются)' + '\n' + str(d[q]) + ':' + '\n' + str(a[0]) + " из " + str(
                 a[1]) + ' или же ' + str(toFixed(a[0] / a[1] * 100, 2)) + '%' + '\n' + str(d[v]) + ':' + '\n' + str(
@@ -202,18 +234,46 @@ async def statist(message: types.Message):
         q = cursor.fetchone()
         q = int(q[-1])
         cursor.execute(f'SELECT pred2 from users where id == {tg_id}')
-        v = cursor.fetchone()
-        v = int(v[-1])
+        v = list(cursor.fetchone())
+        if v[-1]!=None:
+            v[-1] = int(v[-1])
+        else: v[-1] = 'None'
         cursor.execute(f'SELECT pred3 from users where id == {tg_id}')
-        t = cursor.fetchone()
-        t = int(t[-1])
-        await message.reply(
+        t = list(cursor.fetchone())
+        if t[-1]!=None:
+            t[-1] = int(t[-1])
+        else: t[-1]='None'
+        if v[-1]=='None':
+            await message.reply(
             'Вот Ваша статистика по предметам (задания второй части не учитываются)' + '\n' + str(d[q]) + ':' + '\n' + str(a[0]) + " из " + str(
-                a[1]) + ' или же ' + str(toFixed(a[0] / a[1] * 100, 2)) + '%' + '\n' + str(d[v]) + ':' + '\n' + str(
+                a[1]) + ' или же ' + str(toFixed(a[0] / a[1] * 100, 2)) + '%')
+        elif (v[-1]!='None') and (t[-1]=='None'):
+            await message.reply(
+                'Вот Ваша статистика по предметам (задания второй части не учитываются)' + '\n' + str(
+                    d[q]) + ':' + '\n' + str(a[0]) + " из " + str(
+                    a[1]) + ' или же ' + str(toFixed(a[0] / a[1] * 100, 2)) + '%' + '\n' + str(d[v[-1]]) + ':' + '\n' + str(
+                    a[2]) + " из " + str(
+                    a[3]) + ' или же ' + str(toFixed(a[2] / a[3] * 100, 2)) + '%')
+        elif t[-1]!='None':
+            if a[5]==0:
+                await message.reply(
+            'Вот Ваша статистика по предметам (задания второй части не учитываются)' + '\n' + str(d[q]) + ':' + '\n' + str(a[0]) + " из " + str(
+                a[1]) + ' или же ' + str(toFixed(a[0] / a[1] * 100, 2)) + '%' + '\n' + str(d[v[-1]]) + ':' + '\n' + str(
                 a[2]) + " из " + str(
-                a[3]) + ' или же ' + str(toFixed(a[2] / a[3] * 100, 2)) + '%' + '\n' + str(d[t]) + ':' + '\n' + str(
+                a[3]) + ' или же ' + str(toFixed(a[2] / a[3] * 100, 2)) + '%' + '\n' + str(d[t[-1]]) + ':' + '\n' + str(
                 a[4]) + " из " + str(
-                a[5]) + ' или же ' + str(toFixed(a[4] / a[5] * 100, 2)) + '%')
+                a[5]) + ' или же '+ '0%')
+            else:
+                await message.reply(
+                    'Вот Ваша статистика по предметам (задания второй части не учитываются)' + '\n' + str(
+                        d[q]) + ':' + '\n' + str(a[0]) + " из " + str(
+                        a[1]) + ' или же ' + str(toFixed(a[0] / a[1] * 100, 2)) + '%' + '\n' + str(
+                        d[v[-1]]) + ':' + '\n' + str(
+                        a[2]) + " из " + str(
+                        a[3]) + ' или же ' + str(toFixed(a[2] / a[3] * 100, 2)) + '%' + '\n' + str(
+                        d[t[-1]]) + ':' + '\n' + str(
+                        a[4]) + " из " + str(
+                        a[5]) + ' или же ' + str(toFixed(a[4] / a[5] * 100, 2)) + '%')
 
 
 @dp.message_handler(Text(equals="Русский язык"))
